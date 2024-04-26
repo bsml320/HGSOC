@@ -1,0 +1,79 @@
+---
+title: "downloading_TCGA_data"
+author: "Toshiyuki Itai"
+date: "2023-08-15"
+output: html_document
+---
+
+Download data from GDC portal using TCGAbiolinks 
+
+```{r}
+library(TCGAbiolinks)
+library(tidyverse)
+library(maftools)
+library(pheatmap)
+library(SummarizedExperiment)
+```
+
+```{r}
+# get a list of projects
+project <- getGDCprojects()
+```
+
+```{r}
+getProjectSummary("TCGA-OV")
+```
+
+```{r}
+#Building a query
+query_TCGA <- GDCquery(project = "TCGA-OV", data.category = "Transcriptome Profiling")
+```
+
+```{r}
+output_query_TCGA <- getResults(query_TCGA)
+```
+
+```{r}
+query_TCGA <- GDCquery(project = "TCGA-OV",
+                       data.category = "Transcriptome Profiling",
+                       experimental.strategy = "RNA-Seq",
+                       workflow.type = "STAR - Counts",
+                       access = "open")
+```
+
+```{r}
+GDCdownload(query_TCGA)
+```
+
+```{r}
+#prepare data
+tcga_ov_data <- GDCprepare(query_TCGA, summarizedExperiment = TRUE)
+ov_matrix <- assay(tcga_ov_data, "unstranded")
+```
+
+```{r}
+# extract gene and sample metadata from summarizedExperiment object
+gene_metadata <- as.data.frame(rowData(tcga_ov_data))
+coldata <- as.data.frame(colData(tcga_ov_data))
+```
+
+```{r}
+df = as.data.frame(ov_matrix)
+```
+
+```{r}
+df["gene_id"] = rownames(df)
+```
+
+```{r}
+df = inner_join(df, gene_metadata, by = "gene_id")
+```
+
+```{r}
+rownames(df) = df$gene_name
+```
+
+```{r}
+write.csv(df, "TCGA_data.csv", row.names = TRUE)
+```
+

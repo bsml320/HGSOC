@@ -1,0 +1,164 @@
+---
+title: "survival analysis"
+author: "Toshiyuki Itai"
+date: "2023-08-18"
+output: html_document
+---
+
+```{r}
+rm(list = ls())
+```
+
+```{r}
+library(TCGAbiolinks)
+library(survminer)
+library(survival)
+library(SummarizedExperiment)
+library(tidyverse)
+library(DESeq2)
+```
+
+```{r}
+clinical <- GDCquery_clinic("TCGA-OV")
+```
+
+```{r}
+write_csv(clinical, "TCGA_clinical_information.csv")
+```
+
+```{r}
+any(colnames(clinical) %in% c("vital_status", "days_to_last_follow_up", "days_to_death"))
+```
+
+```{r}
+which(colnames(clinical) %in% c("vital_status", "days_to_last_follow_up", "days_to_death"))
+```
+
+```{r}
+clinical[,c(9,35,40)]
+```
+
+```{r}
+table(clinical$vital_status)
+```
+
+```{r}
+clinical_filtered <- clinical %>% filter(vital_status != "Not Reported")
+```
+
+```{r}
+table(clinical_filtered$vital_status)
+```
+
+```{r}
+clinical_filtered$deceased <- ifelse(clinical_filtered$vital_status == "Alive", FALSE, TRUE)
+```
+
+```{r}
+table(clinical_filtered$deceased)
+```
+
+```{r}
+clinical_filtered$overall_survival <- ifelse(clinical_filtered$vital_status == "Alive",
+                                             clinical_filtered$days_to_last_follow_up,
+                                             clinical_filtered$days_to_death)
+```
+
+```{r}
+dir()
+```
+
+```{r}
+query_TCGA <- GDCquery(project = "TCGA-OV",
+                       data.category = "Transcriptome Profiling",
+                       experimental.strategy = "RNA-Seq",
+                       workflow.type = "STAR - Counts",
+                       data.type = "Gene Expression Quantification",
+                       sample.type = "Primary Tumor",
+                       access = "open")
+```
+
+```{r}
+output_query_TCGA <- getResults(query_TCGA)
+```
+
+```{r}
+GDCdownload(query_TCGA)
+```
+
+```{r}
+# get counts
+tcga_ov_data <- GDCprepare(query_TCGA, summarizedExperiment = TRUE)
+ov_matrix <- assay(tcga_ov_data, "unstranded")
+```
+
+```{r}
+# extract gene and sample metadata from summarizedExperiment object
+gene_metadata <- as.data.frame(rowData(tcga_ov_data))
+coldata <- as.data.frame(colData(tcga_ov_data))
+```
+
+```{r}
+dds <- DESeqDataSetFromMatrix(countData = ov_matrix,
+                              colData = coldata,
+                              design = ~ 1)
+```
+
+```{r}
+# Removing genes with sum total of 10 reads across all samples
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+```
+
+```{r}
+# vst
+vsd <- vst(dds, blind = FALSE)
+ov_matrix_vst <- assay(vsd)
+```
+
+```{r}
+## SNX8
+
+target_gene = "SNX8"
+
+data <- ov_matrix_vst %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "gene_id") %>% 
+  gather(key = "case_id", value = "counts", -gene_id) %>% 
+  left_join(., gene_metadata, by = "gene_id") %>% 
+  filter(gene_name == target_gene)
+
+df = as.data.frame(ov_matrix_vst)
+df$gene_id = rownames(df)
+df = left_join(df, gene_metadata, by = "gene_id")
+
+df_filtered <- df %>% filter(gene_name == target_gene)
+
+df_t <- t(df_filtered)
+colnames(df_t) = df_filtered$gene_name
+df_t = df_t[grep("TCGA", rownames(df_t)),]
+df_t = as.data.frame(df_t)
+colnames(df_t)[1] = target_gene
+
+########################################
+df_t$total <- as.numeric(df_t$SNX8) ####       We need to change this value manually
+########################################
+
+df_t$case_id = rownames(df_t)
+
+data <- left_join(data, df_t, by = "case_id")
+
+median_value <- median(data$total)
+data$strata <- ifelse(data$total >= median_value, "HIGH", "LOW")
+
+data$case_id <- gsub("-01.*", "", data$case_id)
+
+data <- merge(data, clinical_filtered, by.x = "case_id", by.y = "submitter_id")
+
+fit <- survfit(Surv(overall_survival, deceased) ~ strata, data = data)
+
+ggsurvplot(fit, data = data, pval = T, risk.table = T)
+```
+
+
+
